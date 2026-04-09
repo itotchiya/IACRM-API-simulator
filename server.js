@@ -34,6 +34,7 @@ app.use(express.json())
 // ─── ACTIVITY LOG ────────────────────────────────────────────────────────────
 const MAX_LOG = 100
 const activityLog = []
+const INVOICE_STATUSES = ['pending', 'paid', 'unpaid', 'overdue', 'cancelled']
 function logActivity(bizId, bizName, method, path, status, note = '') {
   const entry = {
     ts: new Date().toISOString(),
@@ -80,7 +81,7 @@ function makeSeedInvoices(prefix) {
   return [
     { iacrm_id: `${prefix}-inv-001`, invoice_reference: `FAC-001`, prospect_iacrm_id: null, client_id: `${prefix}-cli-001`, client_name: 'Boulangerie Martin', product_name: 'Audit Comptable Annuel', amount: 2500, currency: 'EUR', status: 'paid', issued_at: '2026-01-15', due_at: '2026-02-15', paid_at: '2026-02-10' },
     { iacrm_id: `${prefix}-inv-002`, invoice_reference: `FAC-002`, prospect_iacrm_id: null, client_id: `${prefix}-cli-002`, client_name: 'Garage Petit Freres', product_name: 'Conseil Fiscal Trimestriel', amount: 4700, currency: 'EUR', status: 'overdue', issued_at: '2026-02-01', due_at: '2026-03-01', paid_at: null },
-    { iacrm_id: `${prefix}-inv-003`, invoice_reference: `FAC-003`, prospect_iacrm_id: null, client_id: `${prefix}-cli-003`, client_name: 'Restaurant Le Provencal', product_name: 'Diagnostic RH', amount: 1200, currency: 'EUR', status: 'pending', issued_at: '2026-03-25', due_at: '2026-04-25', paid_at: null },
+    { iacrm_id: `${prefix}-inv-003`, invoice_reference: `FAC-003`, prospect_iacrm_id: null, client_id: `${prefix}-cli-003`, client_name: 'Restaurant Le Provencal', product_name: 'Diagnostic RH', amount: 1200, currency: 'EUR', status: 'unpaid', issued_at: '2026-03-25', due_at: '2026-04-25', paid_at: null },
   ]
 }
 
@@ -143,12 +144,28 @@ function computeStageSummary(prospectsArr) {
 }
 
 function computeInvoiceSummary(invoicesArr) {
-  const r = { total_count: 0, total_amount: 0, paid_count: 0, paid_amount: 0, overdue_count: 0, overdue_amount: 0 }
+  const r = {
+    total_count: 0,
+    total_amount: 0,
+    paid_count: 0,
+    paid_amount: 0,
+    overdue_count: 0,
+    overdue_amount: 0,
+    pending_count: 0,
+    pending_amount: 0,
+    unpaid_count: 0,
+    unpaid_amount: 0,
+    cancelled_count: 0,
+    cancelled_amount: 0,
+  }
   invoicesArr.forEach(inv => {
     r.total_count++
     r.total_amount += inv.amount
     if (inv.status === 'paid')    { r.paid_count++;    r.paid_amount    += inv.amount }
     if (inv.status === 'overdue') { r.overdue_count++; r.overdue_amount += inv.amount }
+    if (inv.status === 'pending') { r.pending_count++; r.pending_amount += inv.amount }
+    if (inv.status === 'unpaid') { r.unpaid_count++; r.unpaid_amount += inv.amount }
+    if (inv.status === 'cancelled') { r.cancelled_count++; r.cancelled_amount += inv.amount }
   })
   return r
 }
@@ -339,6 +356,10 @@ app.get('/invoices/:id', requireApiKey, (req, res) => {
 
 app.post('/invoices', requireApiKey, (req, res) => {
   const body = req.body
+  const status = body.status || 'pending'
+  if (!INVOICE_STATUSES.includes(status)) {
+    return res.status(400).json({ error: `Invalid invoice status '${status}'. Allowed: ${INVOICE_STATUSES.join(', ')}` })
+  }
   const item = {
     iacrm_id: body.iacrm_id || `${req.biz.id}-inv-${Date.now()}`,
     invoice_reference: body.invoice_reference || `FAC-${Date.now()}`,
@@ -348,7 +369,7 @@ app.post('/invoices', requireApiKey, (req, res) => {
     product_name: body.product_name || null,
     amount: Number(body.amount) || 0,
     currency: body.currency || 'EUR',
-    status: body.status || 'pending',
+    status,
     issued_at: body.issued_at || nowIso().substring(0, 10),
     due_at: body.due_at || null,
     paid_at: body.paid_at || null,
@@ -389,8 +410,12 @@ app.patch('/invoices/:id/status', requireApiKey, (req, res) => {
   if (!item) return res.status(404).json({ error: 'Invoice not found' })
   const { status } = req.body
   if (!status) return res.status(400).json({ error: 'status is required' })
+  if (!INVOICE_STATUSES.includes(status)) {
+    return res.status(400).json({ error: `Invalid invoice status '${status}'. Allowed: ${INVOICE_STATUSES.join(', ')}` })
+  }
   item.status = status
   if (status === 'paid' && !item.paid_at) item.paid_at = nowIso().substring(0, 10)
+  if (status !== 'paid') item.paid_at = null
   logActivity(req.biz.id, req.biz.name, 'PATCH', `/invoices/${req.params.id}/status`, 200, status)
   res.json({ data: item })
 })
@@ -1076,7 +1101,9 @@ app.get('/biz/:id', (req, res) => {
             <select id="inv-status">
               <option value="pending">En attente</option>
               <option value="paid">Payée</option>
+              <option value="unpaid">Impayée</option>
               <option value="overdue">En retard</option>
+              <option value="cancelled">Annulée</option>
             </select>
           </div>
           <button class="btn-add" onclick="addInvoice()">Ajouter</button>
@@ -1377,8 +1404,21 @@ app.get('/biz/:id', (req, res) => {
   }
 
   // ── Invoices ──────────────────────────────────────────────────────────────
-  const STATUS_LABELS = { pending: 'En attente', paid: 'Payée', overdue: 'En retard', cancelled: 'Annulée' }
-  const STATUS_CLS    = { pending: 'froid', paid: 'converted', overdue: 'chaud', cancelled: 'lost' }
+  const INVOICE_STATUSES = ['pending', 'paid', 'unpaid', 'overdue', 'cancelled']
+  const STATUS_LABELS = {
+    pending: 'En attente',
+    paid: 'Payée',
+    unpaid: 'Impayée',
+    overdue: 'En retard',
+    cancelled: 'Annulée',
+  }
+  const STATUS_CLS = {
+    pending: 'froid',
+    paid: 'converted',
+    unpaid: 'suspect',
+    overdue: 'chaud',
+    cancelled: 'lost',
+  }
 
   function renderInvoices() {
     // summary
@@ -1417,16 +1457,24 @@ app.get('/biz/:id', (req, res) => {
         <td><span class="sbadge sbadge-\${STATUS_CLS[i.status] || 'suspect'}">\${STATUS_LABELS[i.status] || i.status}</span></td>
         <td class="td-muted">\${i.issued_at || '—'}</td>
         <td class="td-muted">\${i.due_at || '—'}</td>
-        <td>\${(i.status === 'pending' || i.status === 'overdue')
-          ? \`<button class="btn-action btn-pay" onclick="payInvoice('\${i.iacrm_id}')">Marquer payée</button>\`
-          : ''}</td>
+        <td>
+          <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+            <select id="inv-status-\${i.iacrm_id}" style="background:#0f172a;border:1px solid #334155;color:#cbd5e1;border-radius:5px;padding:4px 8px;font-size:.72rem">
+              \${INVOICE_STATUSES.map(s => \`<option value="\${s}" \${i.status === s ? 'selected' : ''}>\${STATUS_LABELS[s] || s}</option>\`).join('')}
+            </select>
+            <button class="btn-action btn-pay" onclick="updateInvoiceStatus('\${i.iacrm_id}')">Mettre à jour</button>
+          </div>
+        </td>
       </tr>
     \`}).join('')
   }
 
-  async function payInvoice(id) {
-    await api(\`/invoices/\${id}/status\`, { method: 'PATCH', body: JSON.stringify({ status: 'paid' }) })
-    showToast('Facture marquée payée')
+  async function updateInvoiceStatus(id) {
+    const statusInput = document.getElementById('inv-status-' + id)
+    const status = statusInput ? statusInput.value : null
+    if (!status) return
+    await api(\`/invoices/\${id}/status\`, { method: 'PATCH', body: JSON.stringify({ status }) })
+    showToast('Statut facture mis à jour')
     await loadAll()
   }
 
