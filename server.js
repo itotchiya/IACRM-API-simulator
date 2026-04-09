@@ -78,9 +78,9 @@ function makeSeedProspects(prefix) {
 
 function makeSeedInvoices(prefix) {
   return [
-    { iacrm_id: `${prefix}-inv-001`, invoice_reference: `FAC-001`, client_id: `${prefix}-cli-001`, client_name: 'Boulangerie Martin', amount: 2500, currency: 'EUR', status: 'paid', issued_at: '2026-01-15', due_at: '2026-02-15', paid_at: '2026-02-10' },
-    { iacrm_id: `${prefix}-inv-002`, invoice_reference: `FAC-002`, client_id: `${prefix}-cli-002`, client_name: 'Garage Petit Freres', amount: 4700, currency: 'EUR', status: 'overdue', issued_at: '2026-02-01', due_at: '2026-03-01', paid_at: null },
-    { iacrm_id: `${prefix}-inv-003`, invoice_reference: `FAC-003`, client_id: `${prefix}-cli-003`, client_name: 'Restaurant Le Provencal', amount: 1200, currency: 'EUR', status: 'pending', issued_at: '2026-03-25', due_at: '2026-04-25', paid_at: null },
+    { iacrm_id: `${prefix}-inv-001`, invoice_reference: `FAC-001`, prospect_iacrm_id: null, client_id: `${prefix}-cli-001`, client_name: 'Boulangerie Martin', product_name: 'Audit Comptable Annuel', amount: 2500, currency: 'EUR', status: 'paid', issued_at: '2026-01-15', due_at: '2026-02-15', paid_at: '2026-02-10' },
+    { iacrm_id: `${prefix}-inv-002`, invoice_reference: `FAC-002`, prospect_iacrm_id: null, client_id: `${prefix}-cli-002`, client_name: 'Garage Petit Freres', product_name: 'Conseil Fiscal Trimestriel', amount: 4700, currency: 'EUR', status: 'overdue', issued_at: '2026-02-01', due_at: '2026-03-01', paid_at: null },
+    { iacrm_id: `${prefix}-inv-003`, invoice_reference: `FAC-003`, prospect_iacrm_id: null, client_id: `${prefix}-cli-003`, client_name: 'Restaurant Le Provencal', product_name: 'Diagnostic RH', amount: 1200, currency: 'EUR', status: 'pending', issued_at: '2026-03-25', due_at: '2026-04-25', paid_at: null },
   ]
 }
 
@@ -342,8 +342,10 @@ app.post('/invoices', requireApiKey, (req, res) => {
   const item = {
     iacrm_id: body.iacrm_id || `${req.biz.id}-inv-${Date.now()}`,
     invoice_reference: body.invoice_reference || `FAC-${Date.now()}`,
+    prospect_iacrm_id: body.prospect_iacrm_id || null,
     client_id: body.client_id || '',
     client_name: body.client_name || null,
+    product_name: body.product_name || null,
     amount: Number(body.amount) || 0,
     currency: body.currency || 'EUR',
     status: body.status || 'pending',
@@ -353,6 +355,32 @@ app.post('/invoices', requireApiKey, (req, res) => {
   }
   req.biz.invoices.push(item)
   logActivity(req.biz.id, req.biz.name, 'POST', '/invoices', 201, item.invoice_reference)
+  res.status(201).json({ data: item })
+})
+
+// Create invoice directly from a prospect
+app.post('/pipeline/prospects/:id/invoices', requireApiKey, (req, res) => {
+  const prospect = req.biz.prospects.find(p => p.iacrm_id === req.params.id)
+  if (!prospect) return res.status(404).json({ error: 'Prospect not found' })
+  const body = req.body
+  const today = nowIso().substring(0, 10)
+  const due   = new Date(Date.now() + 30 * 86400000).toISOString().substring(0, 10)
+  const item = {
+    iacrm_id: `${req.biz.id}-inv-${Date.now()}`,
+    invoice_reference: body.invoice_reference || `FAC-${Date.now()}`,
+    prospect_iacrm_id: prospect.iacrm_id,
+    client_id: null,
+    client_name: prospect.company_name || prospect.contact_name,
+    product_name: body.product_name || null,
+    amount: Number(body.amount) || 0,
+    currency: body.currency || 'EUR',
+    status: 'pending',
+    issued_at: today,
+    due_at: due,
+    paid_at: null,
+  }
+  req.biz.invoices.push(item)
+  logActivity(req.biz.id, req.biz.name, 'POST', `/pipeline/prospects/${req.params.id}/invoices`, 201, `${item.invoice_reference} — ${prospect.contact_name}`)
   res.status(201).json({ data: item })
 })
 
@@ -887,6 +915,12 @@ app.get('/biz/:id', (req, res) => {
     .stage-option:hover { border-color: #3b82f6; color: #f8fafc; }
     .stage-option.current { border-color: #3b82f6; background: #3b82f611; color: #60a5fa; }
     .modal-cancel { margin-top: 12px; width: 100%; cursor: pointer; background: #334155; border: none; color: #94a3b8; border-radius: 7px; padding: 8px; font-size: .8rem; }
+    /* ── Invoice modal ── */
+    .inv-modal-bg { display: none; position: fixed; inset: 0; background: #00000088; z-index: 110; align-items: center; justify-content: center; }
+    .inv-modal-bg.open { display: flex; }
+    .inv-modal { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 24px; min-width: 320px; max-width: 420px; width: 100%; }
+    .btn-invoice { background: #a78bfa22; color: #a78bfa; border: 1px solid #a78bfa44; cursor: pointer; border-radius: 5px; font-size: .7rem; font-weight: 600; padding: 4px 8px; }
+    .btn-invoice:hover { background: #a78bfa33; }
 
     /* ── Misc ── */
     .section-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
@@ -1027,14 +1061,15 @@ app.get('/biz/:id', (req, res) => {
       <div id="invoice-summary" style="display:flex;gap:12px;margin-bottom:20px;flex-wrap:wrap"></div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Référence</th><th>Client</th><th>Montant</th><th>Statut</th><th>Émise</th><th>Échéance</th><th>Actions</th></tr></thead>
-          <tbody id="invoices-body"><tr><td colspan="7" style="color:#475569;padding:32px;text-align:center">Chargement…</td></tr></tbody>
+          <thead><tr><th>Référence</th><th>Client / Prospect</th><th>Produit</th><th>Montant</th><th>Statut</th><th>Émise</th><th>Échéance</th><th>Actions</th></tr></thead>
+          <tbody id="invoices-body"><tr><td colspan="8" style="color:#475569;padding:32px;text-align:center">Chargement…</td></tr></tbody>
         </table>
       </div>
       <div class="form-section">
-        <div class="form-section-title">Ajouter une facture</div>
+        <div class="form-section-title">Ajouter une facture (sans prospect lié — utilisez 🧾 sur les cartes kanban pour lier à un prospect)</div>
         <div class="form-row">
           <div class="fg"><label>Client *</label><input type="text" id="inv-client" placeholder="Boulangerie Martin"></div>
+          <div class="fg"><label>Produit</label><input type="text" id="inv-product" placeholder="Audit Comptable"></div>
           <div class="fg"><label>Montant (EUR)</label><input type="number" id="inv-amount" placeholder="2500" min="0"></div>
           <div class="fg"><label>Référence</label><input type="text" id="inv-ref" placeholder="FAC-2026-011"></div>
           <div class="fg"><label>Statut</label>
@@ -1057,6 +1092,22 @@ app.get('/biz/:id', (req, res) => {
       <div class="modal-title" id="modal-title">Changer le stade</div>
       <div class="stage-btn-grid" id="modal-stage-options"></div>
       <button class="modal-cancel" onclick="closeModal()">Annuler</button>
+    </div>
+  </div>
+
+  <!-- Invoice creation modal -->
+  <div class="inv-modal-bg" id="inv-modal">
+    <div class="inv-modal">
+      <div class="modal-title">Créer une facture — <span id="inv-modal-prospect"></span></div>
+      <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:16px">
+        <div class="fg"><label>Produit / Service</label><input type="text" id="inv-m-product" placeholder="Audit Comptable Annuel"></div>
+        <div class="fg"><label>Montant (EUR) *</label><input type="number" id="inv-m-amount" placeholder="2500" min="0" step="0.01"></div>
+        <div class="fg"><label>Référence (optionnel)</label><input type="text" id="inv-m-ref" placeholder="FAC-2026-042"></div>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn-add" style="flex:1" onclick="submitProspectInvoice()">Créer la facture</button>
+        <button class="modal-cancel" style="margin:0;flex:1" onclick="closeInvModal()">Annuler</button>
+      </div>
     </div>
   </div>
 
@@ -1180,7 +1231,9 @@ app.get('/biz/:id', (req, res) => {
                     \${stage.key !== 'lost'      ? \`<button class="btn-stage btn-lost" onclick="changeStage('\${p.iacrm_id}','lost')">Perdu</button>\` : ''}
                     \${stage.key === 'prospect_chaud' ? \`<button class="btn-stage btn-won" onclick="changeStage('\${p.iacrm_id}','converted')">Converti ✓</button>\` : ''}
                     <button class="btn-stage btn-pick" onclick="openStageModal('\${p.iacrm_id}','\${p.contact_name}','\${p.stage}')">…</button>
+                    <button class="btn-invoice" onclick="openInvModal('\${p.iacrm_id}','\${h(p.contact_name)}')">🧾 Facture</button>
                   </div>
+                  \${(() => { const inv = state.invoices.filter(i => i.prospect_iacrm_id === p.iacrm_id); return inv.length ? \`<div style="margin-top:8px;display:flex;flex-direction:column;gap:3px">\${inv.map(i => \`<div style="font-size:.68rem;display:flex;justify-content:space-between;padding:3px 6px;background:#0f172a;border-radius:4px;border:1px solid #334155"><span style="color:#a5f3fc;font-family:monospace">\${h(i.invoice_reference)}</span><span style="color:\${i.status==='paid'?'#4ade80':i.status==='overdue'?'#fca5a5':'#94a3b8'}">\${Number(i.amount).toLocaleString('fr')}€ · \${STATUS_LABELS[i.status]||i.status}</span></div>\`).join('')}</div>\` : '' })()}
                 </div>
               \`).join('')
             }
@@ -1350,10 +1403,16 @@ app.get('/biz/:id', (req, res) => {
       tbody.innerHTML = '<tr><td colspan="7" class="td-muted" style="padding:32px;text-align:center">Aucune facture</td></tr>'
       return
     }
-    tbody.innerHTML = state.invoices.map(i => \`
+    tbody.innerHTML = state.invoices.map(i => {
+      const linkedProspect = i.prospect_iacrm_id ? state.prospects.find(p => p.iacrm_id === i.prospect_iacrm_id) : null
+      return \`
       <tr>
         <td style="font-family:monospace;font-size:.8rem;color:#a5f3fc">\${h(i.invoice_reference)}</td>
-        <td class="td-muted">\${h(i.client_name || i.client_id || '—')}</td>
+        <td class="td-muted">
+          \${h(i.client_name || i.client_id || '—')}
+          \${linkedProspect ? \`<div style="font-size:.7rem;color:#a78bfa;margin-top:2px">🔗 \${h(linkedProspect.contact_name)}</div>\` : ''}
+        </td>
+        <td class="td-muted">\${h(i.product_name || '—')}</td>
         <td class="price-val">\${Number(i.amount).toLocaleString('fr')} €</td>
         <td><span class="sbadge sbadge-\${STATUS_CLS[i.status] || 'suspect'}">\${STATUS_LABELS[i.status] || i.status}</span></td>
         <td class="td-muted">\${i.issued_at || '—'}</td>
@@ -1362,7 +1421,7 @@ app.get('/biz/:id', (req, res) => {
           ? \`<button class="btn-action btn-pay" onclick="payInvoice('\${i.iacrm_id}')">Marquer payée</button>\`
           : ''}</td>
       </tr>
-    \`).join('')
+    \`}).join('')
   }
 
   async function payInvoice(id) {
@@ -1372,20 +1431,54 @@ app.get('/biz/:id', (req, res) => {
   }
 
   async function addInvoice() {
-    const client = document.getElementById('inv-client').value.trim()
-    const amount = document.getElementById('inv-amount').value
-    const ref    = document.getElementById('inv-ref').value.trim()
-    const status = document.getElementById('inv-status').value
+    const client  = document.getElementById('inv-client').value.trim()
+    const product = document.getElementById('inv-product').value.trim()
+    const amount  = document.getElementById('inv-amount').value
+    const ref     = document.getElementById('inv-ref').value.trim()
+    const status  = document.getElementById('inv-status').value
     if (!client || !amount) { showToast('Client et montant requis', true); return }
     const today = new Date().toISOString().substring(0, 10)
     const due   = new Date(Date.now() + 30*86400000).toISOString().substring(0, 10)
-    await api('/invoices', { method: 'POST', body: JSON.stringify({ client_name: client, amount: Number(amount), invoice_reference: ref || null, status, issued_at: today, due_at: due }) })
+    await api('/invoices', { method: 'POST', body: JSON.stringify({ client_name: client, product_name: product || null, amount: Number(amount), invoice_reference: ref || null, status, issued_at: today, due_at: due }) })
     showToast('Facture ajoutée !')
-    document.getElementById('inv-client').value = ''
-    document.getElementById('inv-amount').value = ''
-    document.getElementById('inv-ref').value    = ''
+    document.getElementById('inv-client').value  = ''
+    document.getElementById('inv-product').value = ''
+    document.getElementById('inv-amount').value  = ''
+    document.getElementById('inv-ref').value     = ''
     await loadAll()
   }
+
+  // ── Invoice modal ─────────────────────────────────────────────────────────
+  let _invProspectId = null
+  function openInvModal(prospectId, prospectName) {
+    _invProspectId = prospectId
+    document.getElementById('inv-modal-prospect').textContent = prospectName
+    document.getElementById('inv-m-product').value = ''
+    document.getElementById('inv-m-amount').value  = ''
+    document.getElementById('inv-m-ref').value     = ''
+    document.getElementById('inv-modal').classList.add('open')
+  }
+  function closeInvModal() {
+    document.getElementById('inv-modal').classList.remove('open')
+    _invProspectId = null
+  }
+  async function submitProspectInvoice() {
+    const amount  = document.getElementById('inv-m-amount').value
+    const product = document.getElementById('inv-m-product').value.trim()
+    const ref     = document.getElementById('inv-m-ref').value.trim()
+    if (!amount || Number(amount) <= 0) { showToast('Montant requis', true); return }
+    if (!_invProspectId) return
+    await api(\`/pipeline/prospects/\${_invProspectId}/invoices\`, {
+      method: 'POST',
+      body: JSON.stringify({ product_name: product || null, amount: Number(amount), invoice_reference: ref || null })
+    })
+    showToast('Facture créée — sera synchronisée avec HD Parrainage')
+    closeInvModal()
+    await loadAll()
+  }
+
+  // Close invoice modal on backdrop click
+  document.getElementById('inv-modal').addEventListener('click', e => { if (e.target === e.currentTarget) closeInvModal() })
 
   // Close modal on backdrop click
   document.getElementById('stage-modal').addEventListener('click', e => { if (e.target === e.currentTarget) closeModal() })
