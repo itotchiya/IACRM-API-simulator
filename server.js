@@ -94,7 +94,7 @@ function generateApiKey(prefix) {
 
 const businessRegistry = {}
 
-function createBusiness({ id, name, industry, apiKey, seed = true }) {
+function createBusiness({ id, name, industry, apiKey, seed = false }) {
   const biz = {
     id,
     name,
@@ -110,10 +110,13 @@ function createBusiness({ id, name, industry, apiKey, seed = true }) {
   return biz
 }
 
-// Seed three businesses
-createBusiness({ id: 'dupont',  name: 'Dupont & Associes',      industry: 'Conseil en gestion',   apiKey: 'dupont-key-demo2024' })
-createBusiness({ id: 'moreau',  name: 'Moreau Technologies SAS', industry: 'Services informatiques', apiKey: 'moreau-key-demo2024' })
-createBusiness({ id: 'bernard', name: 'Bernard Immobilier SARL', industry: 'Immobilier',             apiKey: 'bernard-key-demo2024' })
+// Create sample IACRM businesses with demo data (for testing)
+// In production, businesses are created via admin panel with seed: false
+createBusiness({ id: 'dupont',  name: 'Dupont & Associes',      industry: 'Conseil en gestion',   apiKey: 'dupont-key-demo2024', seed: true })
+createBusiness({ id: 'moreau',  name: 'Moreau Technologies SAS', industry: 'Services informatiques', apiKey: 'moreau-key-demo2024', seed: true })
+createBusiness({ id: 'bernard', name: 'Bernard Immobilier SARL', industry: 'Immobilier',             apiKey: 'bernard-key-demo2024', seed: true })
+// New business with zero data (typical new IACRM customer)
+createBusiness({ id: 'nouveau', name: 'Nouveau Business SARL',  industry: 'Services',              apiKey: 'nouveau-key-demo2024', seed: false })
 
 // ─── AUTH MIDDLEWARE ──────────────────────────────────────────────────────────
 function requireApiKey(req, res, next) {
@@ -454,13 +457,15 @@ app.get('/admin/businesses/:id', requireAdminKey, (req, res) => {
   res.json({ data: biz })
 })
 
-// Create a new business
+// Create a new business in IACRM
+// New businesses start with zero data (empty services, clients, prospects)
 app.post('/admin/businesses', requireAdminKey, (req, res) => {
   const { name, industry } = req.body
   if (!name) return res.status(400).json({ error: 'name is required' })
   const id = name.toLowerCase().replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').substring(0, 20) + '-' + Date.now().toString().slice(-4)
   const apiKey = generateApiKey(id.split('-').slice(0, 2).join('-'))
-  const biz = createBusiness({ id, name, industry, apiKey, seed: true })
+  // New IACRM businesses start with zero data by default
+  const biz = createBusiness({ id, name, industry, apiKey, seed: false })
   logActivity(id, name, 'POST', '/admin/businesses', 201, `API key: ${apiKey}`)
   res.status(201).json({ data: { id: biz.id, name: biz.name, apiKey: biz.apiKey } })
 })
@@ -538,13 +543,15 @@ app.get('/platform/businesses/:id', requirePlatformKey, (req, res) => {
 })
 
 // Create a new business via the platform (superadmin only)
+// Businesses created through HD Parrainage invitation flow start with zero data
 app.post('/platform/businesses', requirePlatformKey, (req, res) => {
   if (!req.isSuperAdmin) return res.status(403).json({ error: 'Superadmin key required' })
   const { name, industry } = req.body
   if (!name) return res.status(400).json({ error: 'name is required' })
   const id     = name.toLowerCase().replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').substring(0, 20) + '-' + Date.now().toString().slice(-4)
   const apiKey = generateApiKey(id.split('-').slice(0, 2).join('-'))
-  const biz    = createBusiness({ id, name, industry, apiKey, seed: true })
+  // New IACRM businesses always start with zero data
+  const biz    = createBusiness({ id, name, industry, apiKey, seed: false })
   logActivity(id, name, 'POST', '/platform/businesses', 201, `API key: ${apiKey}`)
   res.status(201).json({ data: { ...bizToPublic(biz), api_key: apiKey } })
 })
