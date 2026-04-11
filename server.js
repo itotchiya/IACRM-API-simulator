@@ -178,7 +178,12 @@ function computeInvoiceSummary(invoicesArr) {
 app.post('/auth/token', (req, res) => {
   const key = req.headers['x-iacrm-api-key'] || req.body?.api_key
   const biz = key ? Object.values(businessRegistry).find(b => b.apiKey === key) : null
-  logActivity(biz?.id, biz?.name, 'POST', '/auth/token', 200)
+  const isSuperAdmin = key === SUPERADMIN_KEY
+  if (!biz && !isSuperAdmin) {
+    logActivity(null, 'unknown', 'POST', '/auth/token', 403, 'Invalid API key')
+    return res.status(403).json({ error: 'Invalid API key' })
+  }
+  logActivity(biz?.id, biz?.name || (isSuperAdmin ? 'platform' : undefined), 'POST', '/auth/token', 200)
   res.json({ access_token: `mock-token-${Date.now()}`, token_type: 'Bearer', expires_in: 3600 })
 })
 
@@ -287,10 +292,14 @@ app.post('/pipeline/prospects', requireApiKey, (req, res) => {
   const item = {
     iacrm_id: body.iacrm_id || `${req.biz.id}-prsp-${Date.now()}`,
     contact_name: body.contact_name || '',
+    contact_email: body.contact_email || null,
+    contact_phone: body.contact_phone || null,
     company_name: body.company_name || null,
     stage: body.stage || 'suspect',
     progression_status: body.progression_status || 'new',
     assigned_agent: body.assigned_agent || null,
+    source: body.source || null,
+    source_id: body.source_id || null,
     created_at: ts,
     updated_at: ts,
   }
